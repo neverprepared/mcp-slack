@@ -90,7 +90,7 @@ The server runs in one of two modes (auto-detected):
 
 ### Relay mode (browser-scraped tokens via Ably)
 
-For workspaces where you can't install an OAuth app — uses `xoxc-` + `d` cookie scraped by the Chrome extension in `chrome-extension/slack/`.
+For workspaces where you can't install an OAuth app — uses `xoxc-` + `d` cookie scraped by the Chrome extension.
 
 ```
 Chrome ext ──encrypt──► Ably channel ──► AblySubscriber thread ──► encrypted cache file ──► SlackClient
@@ -98,9 +98,9 @@ Chrome ext ──encrypt──► Ably channel ──► AblySubscriber thread �
                                           macOS Keychain ◄── passphrase + Ably key
 ```
 
-1. Load `chrome-extension/slack/` as an unpacked extension in Chrome.
+1. Download `chrome-extension.zip` from the [latest release](https://github.com/neverprepared/mcp-slack/releases/latest), unzip it, then load the `slack/` folder as an unpacked extension in Chrome (`chrome://extensions` → **Load unpacked**).
 2. Click the extension → **Generate Key** (or paste an existing one), enter your **Ably API key** and **channel name**, save.
-3. On the MCP host, run `mcp-slack-setup`. Paste the same passphrase, same Ably key, same channel name.
+3. Run `mcp-slack setup`. Paste the same passphrase, Ably key, and channel name when prompted.
 4. Open `app.slack.com` — the extension captures the next token and publishes it.
 5. Start the MCP server. It pulls the most recent token from Ably history on boot, then subscribes for live updates.
 
@@ -153,27 +153,50 @@ On the same page, add **User Token Scopes**: `search:read`, `users.profile:write
 
 ## Installation
 
+### Homebrew (macOS ARM64)
+
 ```bash
-pip install mcp-slack
+brew install neverprepared/tap/mcp-slack
 ```
 
-Or from source:
+### Manual
+
+Download the latest `mcp-slack_darwin_arm64.tar.gz` from the [releases page](https://github.com/neverprepared/mcp-slack/releases/latest), extract, and move the binary somewhere on your `$PATH`:
 
 ```bash
-git clone https://github.com/neverprepared/mcp-slack
-cd mcp-slack
-pip install -e .
+tar -xzf mcp-slack_darwin_arm64.tar.gz
+mv mcp-slack /usr/local/bin/
+```
+
+### First-time setup
+
+After installing, run the setup wizard once to store your credentials in the macOS Keychain:
+
+```bash
+mcp-slack setup
 ```
 
 ## Claude Code Configuration
 
-Add to your `.claude.json` or `~/.claude.json`:
+Add to your MCP host config (e.g. `~/.claude/.claude.json` for Claude Code):
 
 ```json
 {
   "mcpServers": {
     "slack": {
-      "command": "mcp-slack",
+      "command": "/opt/homebrew/bin/mcp-slack"
+    }
+  }
+}
+```
+
+For OAuth mode, pass tokens via environment variables:
+
+```json
+{
+  "mcpServers": {
+    "slack": {
+      "command": "/opt/homebrew/bin/mcp-slack",
       "env": {
         "SLACK_BOT_TOKEN": "xoxb-...",
         "SLACK_USER_TOKEN": "xoxp-..."
