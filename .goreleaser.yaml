@@ -34,6 +34,8 @@ brews:
       owner: neverprepared
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      branch: main
+    directory: Formula
     homepage: "https://github.com/neverprepared/mcp-slack"
     description: "MCP server for Slack — messages, channels, users, files, reactions, pins, and search"
     license: "MIT"
