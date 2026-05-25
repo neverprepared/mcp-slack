@@ -28,7 +28,7 @@ archives:
 checksum:
   name_template: checksums.txt
 
-brews:
+homebrew:
   - name: mcp-slack
     repository:
       owner: neverprepared
