@@ -1,5 +1,6 @@
 # Go
 /dist/
+/chrome-extension.zip
 
 # Python (legacy — keeping source for reference)
 .venv/

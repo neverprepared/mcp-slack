@@ -5,6 +5,7 @@ project_name: mcp-slack
 before:
   hooks:
     - go mod tidy
+    - zip -r chrome-extension.zip chrome-extension/
 
 builds:
   - main: ./cmd/mcp-slack
@@ -52,3 +53,5 @@ release:
   github:
     owner: neverprepared
     name: mcp-slack
+  extra_files:
+    - glob: ./chrome-extension.zip
