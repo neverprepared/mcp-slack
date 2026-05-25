@@ -1,0 +1,18 @@
+# Go
+/dist/
+
+# Python (legacy — keeping source for reference)
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+uv.lock
+*.egg-info/
+
+# Secrets / local config
+.env
+*.local
+
+# macOS
+.DS_Store

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px; padding: 0; margin: 0; color: #333;
+      display: flex; flex-direction: column;
+    }
+    .header {
+      background: linear-gradient(135deg, #4a154b, #611f69);
+      color: white; padding: 12px 16px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .header h2 { margin: 0; font-size: 15px; font-weight: 600; }
+    .header .subtitle { font-size: 11px; opacity: 0.8; margin-top: 1px; }
+    .settings-icon { width: 18px; height: 18px; color: white; cursor: pointer; opacity: 0.8; }
+    .settings-icon:hover { opacity: 1; }
+
+    .status-bar {
+      padding: 10px 16px; border-bottom: 1px solid #eee;
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .workspace { font-size: 14px; font-weight: 600; }
+    .user { font-size: 11px; color: #666; }
+    .token-badge {
+      font-size: 10px; padding: 2px 6px; border-radius: 3px;
+      display: inline-block; margin-top: 2px;
+    }
+    .token-badge.ok { background: #e8f5e9; color: #2e7d32; }
+    .token-badge.missing { background: #fbe9e7; color: #c62828; }
+    .no-token { font-size: 12px; color: #999; font-style: italic; }
+
+    .relay-row {
+      padding: 10px 16px; border-bottom: 1px solid #eee;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .relay-label { font-size: 12px; font-weight: 600; }
+    .relay-meta { font-size: 11px; color: #888; margin-top: 2px; }
+    .relay-btn {
+      padding: 5px 10px; font-size: 11px; font-weight: 600;
+      background: #4a154b; color: white; border: none;
+      border-radius: 4px; cursor: pointer;
+    }
+    .relay-btn:hover { background: #611f69; }
+    .relay-btn:disabled { background: #ccc; cursor: default; }
+
+    .switch-row {
+      padding: 8px 16px; display: flex; align-items: center;
+      justify-content: space-between; border-bottom: 1px solid #eee;
+    }
+    .switch-row span { font-size: 12px; font-weight: 600; }
+    .switch {
+      position: relative; width: 36px; height: 20px;
+      background: #ccc; border-radius: 10px; cursor: pointer; transition: background 0.2s;
+    }
+    .switch.on { background: #4a154b; }
+    .switch .knob {
+      position: absolute; top: 2px; left: 2px;
+      width: 16px; height: 16px; background: white;
+      border-radius: 50%; transition: left 0.2s;
+    }
+    .switch.on .knob { left: 18px; }
+
+    .settings-view { display: none; flex-direction: column; }
+    .settings-view.show { display: flex; }
+    .main-content.hide { display: none; }
+
+    .back-btn {
+      font-size: 12px; color: #4a154b; cursor: pointer;
+      border: none; background: none; padding: 10px 16px; text-align: left;
+    }
+    .back-btn:hover { text-decoration: underline; }
+    .settings-body { padding: 0 16px 16px; }
+
+    .section-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      color: #999; letter-spacing: 0.5px; margin: 14px 0 6px;
+    }
+    .config-fields label { display: block; font-weight: 600; font-size: 11px; margin-top: 8px; color: #555; }
+    .config-fields input {
+      width: 100%; padding: 5px; margin-top: 2px;
+      border: 1px solid #ddd; border-radius: 3px; font-size: 12px;
+    }
+    .config-fields button {
+      margin-top: 8px; padding: 6px 12px;
+      background: #4a154b; color: white; border: none;
+      border-radius: 3px; cursor: pointer; font-size: 12px; width: 100%;
+    }
+    .config-fields button:hover { background: #611f69; }
+    .save-msg {
+      font-size: 11px; margin-top: 6px; padding: 5px 8px;
+      border-radius: 3px; display: none;
+    }
+    .save-msg.success { display: block; background: #e8f5e9; color: #2e7d32; }
+    .save-msg.error { display: block; background: #fbe9e7; color: #c62828; }
+
+    .key-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; }
+    .key-status { font-size: 11px; color: #888; margin: 4px 0 8px; }
+    .key-status.active { color: #2e7d32; }
+    .key-status.missing { color: #e65100; }
+    .key-display {
+      font-family: monospace; font-size: 11px; word-break: break-all;
+      background: #f5f5f5; padding: 8px; border-radius: 3px;
+      margin-bottom: 8px; display: none; cursor: pointer;
+      border: 1px solid #ddd; min-height: 2.5em;
+    }
+    .key-display.show { display: block; }
+    .key-buttons { display: flex; gap: 6px; }
+    .key-btn { flex: 1; margin-top: 0; padding: 6px 8px; font-size: 11px; }
+    .key-btn.secondary { background: #666; }
+    .key-btn.secondary:hover { background: #444; }
+    .key-input-row { display: none; margin-top: 6px; gap: 6px; align-items: center; }
+    .key-input-row.show { display: flex; }
+    .key-input-row input { flex: 1; }
+    .key-input-row button { flex: 0; width: auto; margin-top: 0; }
+    .danger-btn {
+      margin-top: 6px; padding: 6px 12px; background: #c62828; color: white;
+      border: none; border-radius: 3px; cursor: pointer; font-size: 12px; width: 100%;
+    }
+    .danger-btn:hover { background: #b71c1c; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h2>MSG — Slack</h2>
+      <div class="subtitle">Token relay</div>
+    </div>
+    <svg id="settingsBtn" class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+  </div>
+
+  <div class="main-content" id="mainContent">
+    <div class="status-bar" id="statusBar">
+      <div class="no-token">Open app.slack.com — token will be captured automatically</div>
+    </div>
+
+    <div class="relay-row">
+      <div>
+        <div class="relay-label">Relay</div>
+        <div class="relay-meta" id="lastRelayTime">Never relayed</div>
+      </div>
+      <button class="relay-btn" id="relayNow">Relay Now</button>
+    </div>
+
+    <div class="switch-row">
+      <span>Auto-relay</span>
+      <div id="toggle" class="switch"><div class="knob"></div></div>
+    </div>
+  </div>
+
+  <div class="settings-view" id="settingsView">
+    <button class="back-btn" id="backBtn">← Back</button>
+    <div class="settings-body">
+      <div class="section-label">Sync</div>
+      <div class="config-fields">
+        <label>Service Key</label>
+        <input type="password" id="ablyKey" placeholder="xxxxx.yyyy:zzzz">
+        <label>Channel</label>
+        <input type="text" id="ablyChannel" placeholder="channel name">
+        <label>Interval (seconds)</label>
+        <input type="number" id="interval" value="60" min="30" max="600">
+        <button id="save">Save</button>
+        <div class="save-msg" id="saveMsg"></div>
+      </div>
+
+      <div class="key-section">
+        <div class="section-label">Encryption Key</div>
+        <div class="key-status" id="keyStatus">Checking...</div>
+        <div class="key-display" id="keyDisplay"></div>
+        <div class="key-buttons">
+          <button id="generateKey" class="config-fields key-btn">Generate New Key</button>
+          <button id="enterKey" class="config-fields key-btn secondary">Enter Existing Key</button>
+        </div>
+        <div class="key-input-row" id="keyInputRow">
+          <input type="text" id="keyInput" placeholder="Paste key">
+          <button id="setKey" class="config-fields key-btn">Set</button>
+        </div>
+      </div>
+
+      <div class="key-section">
+        <div class="section-label">Danger Zone</div>
+        <button class="danger-btn" id="clearTokens">Clear All Tokens</button>
+        <div class="save-msg" id="clearMsg"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

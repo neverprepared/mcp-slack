@@ -1,0 +1,52 @@
+version: 2
+
+project_name: mcp-slack
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/mcp-slack
+    binary: mcp-slack
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    env:
+      - CGO_ENABLED=1
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+brews:
+  - name: mcp-slack
+    repository:
+      owner: neverprepared
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/neverprepared/mcp-slack"
+    description: "MCP server for Slack — messages, channels, users, files, reactions, pins, and search"
+    license: "MIT"
+    install: |
+      bin.install "mcp-slack"
+    caveats: |
+      Before first use, run the setup wizard:
+        mcp-slack setup
+
+      Then configure your MCP host (e.g. Claude Code) to run:
+        mcp-slack
+
+release:
+  github:
+    owner: neverprepared
+    name: mcp-slack
