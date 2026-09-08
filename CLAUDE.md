@@ -2,88 +2,170 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Overview
+
+`mcp-slack` is a **Go** MCP (Model Context Protocol) server that exposes the Slack Web API as MCP
+tools over **stdio**. It is built on [`mark3labs/mcp-go`](https://github.com/mark3labs/mcp-go) and
+[`slack-go/slack`](https://github.com/slack-go/slack), with a Cobra CLI front end.
+
+Two token sources are supported: a normal OAuth bot token from the environment, or browser-scraped
+session tokens relayed from a bundled Chrome extension through an Ably channel (encrypted).
+
+> The `chrome-extension/slack/` directory ships with the repo and is zipped as a release artifact.
+> A Python implementation existed historically; it is gone — the `.gitignore` still carries legacy
+> Python entries.
+
 ## Commands
 
 ```bash
-# Install (editable) into a uv-managed venv
-uv venv && uv pip install -e .
+# Build
+go build ./...
+go build -o mcp-slack ./cmd/mcp-slack
 
-# Smoke test: instantiate the server (a fake bot token is enough — no Slack call is made at startup)
-SLACK_BOT_TOKEN=xoxb-test uv run python -c "from mcp_slack.server import create_server; create_server()"
+# Vet / format (no golangci-lint config in this repo)
+go vet ./...
+gofmt -l .
 
-# Run the server (stdio transport — what an MCP host launches)
-SLACK_BOT_TOKEN=xoxb-... uv run mcp-slack
-# equivalently: uv run python -m mcp_slack
+# Tests — there are currently NO *_test.go files in this repo.
+go test ./...
 
-# Tests (pytest is configured in pyproject.toml; no tests exist yet)
-uv run pytest
-uv run pytest tests/path/to/test_file.py::test_name
+# Run the MCP server on stdio (default when no subcommand is given)
+SLACK_BOT_TOKEN=xoxb-... go run ./cmd/mcp-slack
+go run ./cmd/mcp-slack serve
+
+# Interactive setup: store Ably API key, encryption passphrase (OS keychain)
+# and ably_channel (config.json) for relay mode
+go run ./cmd/mcp-slack setup
+
+# Release (tag push -> .github/workflows/release.yaml -> goreleaser, macOS arm64 only)
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
-There is no lint/typecheck config in this repo.
+### Environment variables
+
+| Var | Purpose |
+|---|---|
+| `SLACK_BOT_TOKEN` | `xoxb-…`. If set, selects **oauth** mode. |
+| `SLACK_USER_TOKEN` | `xoxp-…`. Optional; required in oauth mode for `search_*`, `set_user_profile`, `set_user_presence`. |
+| `ABLY_CHANNEL` | Fallback for `ably_channel` when it is absent from `config.json`. |
+| `XDG_CONFIG_HOME` | Base for the config dir (default `~/.config`). Always use `cache.ConfigDir()`, never hardcode. |
 
 ## Architecture
 
-This is a **FastMCP server** that exposes Slack's Web API as MCP tools, with two token sources (OAuth env var, or browser-scraped tokens relayed through Ably).
+```
+cmd/mcp-slack/main.go     Cobra CLI: root/`serve` -> server.New + server.ServeStdio; `setup` wizard
+internal/server           New(version) wires MCPServer + SlackClient + Ably subscriber; Stop()
+internal/client           SlackClient — mode selection, RWMutex-guarded bot/user clients
+internal/tools            8 modules, 53 registered MCP tools; util.go has wrap()/okJSON()/arg helpers
+internal/ably             Background Subscriber goroutine: history-on-start, then live subscribe
+internal/cache            TokenCache (encrypted token.enc, 0600, atomic write) + config.json
+internal/crypto           PBKDF2-HMAC-SHA256 / AES-256-GCM (mirror of chrome-extension crypto.js)
+internal/secrets          OS keyring (zalando/go-keyring), service "mcp-slack"
+chrome-extension/slack    MV3 extension that scrapes and publishes encrypted Slack tokens to Ably
+```
 
 ### Token sourcing — two modes
 
-`SlackClient` auto-selects mode in `client.py`:
+`client.New` auto-selects in `internal/client/client.go`:
 
-| Mode | Trigger | Path |
+| Mode | Trigger | Behaviour |
 |---|---|---|
-| `oauth` | `SLACK_BOT_TOKEN` env set | `WebClient(token=env)` — never touches cache or keychain |
-| `relay` | env unset, `TokenCache` provided | Lazy-build `WebClient` from `cache.get()` (token + `d` cookie header). `AblySubscriber` pushes refreshes via `client.refresh_from_token(payload)` |
+| `oauth` | `SLACK_BOT_TOKEN` set | `slack.New(botToken)` immediately; never touches cache or keychain. |
+| `relay` | env unset, `TokenCache` provided | `Bot()` lazily builds a client from `cache.Get()` (token + `d=` cookie via a custom `RoundTripper`). `Subscriber` pushes refreshes into `RefreshFromToken`. |
 
-The `bot` attribute is a **property** with a lock — never assign to it; use `refresh_from_token`. Tests that want to inject a user-token mock should set `cli._user` (the backing field), not `cli.user`.
+- `bot`/`user` are unexported and guarded by an `sync.RWMutex`. Never assign directly — go through
+  `Bot()`, `User()`, `RefreshFromToken()`.
+- `User()` in **relay** mode falls back to `Bot()` (a scraped `xoxc-` token *is* a user session).
+  In **oauth** mode it errors unless `SLACK_USER_TOKEN` is set.
+- The constructor never calls Slack. Auth failures surface lazily on the first tool invocation.
 
 ### Relay-mode data flow
 
 ```
-Chrome ext (chrome-extension/slack/) ──AES-256-GCM──► Ably channel
-                                                          │
-              ┌───────────────────────────────────────────┘
-              ▼
-        AblySubscriber (background thread, own asyncio loop)
-              │  history-on-start → live subscribe
-              ▼
-        on_token(payload):
-          1. TokenCache.save() — atomic write to $XDG_CONFIG_HOME/mcp-slack/token.enc (0600)
-          2. SlackClient.refresh_from_token() — swap in-memory WebClient
+Chrome ext (chrome-extension/slack/) --AES-256-GCM--> Ably channel
+                                                          |
+        ably.Subscriber (goroutine; history-on-start, then live subscribe)
+                                                          |
+        onToken(payload):
+          1. TokenCache.Save()      -> atomic 0600 write of $XDG_CONFIG_HOME/mcp-slack/token.enc
+          2. SlackClient.RefreshFromToken()  -> swap in-memory *slack.Client
 ```
 
-Crucial invariants:
-- `crypto.py` (Python) and `chrome-extension/slack/crypto.js` are byte-compatible: PBKDF2-HMAC-SHA256, 100 000 iters, AES-256-GCM, wire format `base64(salt[32] || nonce[12] || ct+tag)`. **If you change one, change both** or the relay breaks silently.
-- Passphrase and Ably API key live in the OS keyring (`secrets.py`, service `mcp-slack`). They are *never* written to disk.
-- `config.json` only holds non-secrets (currently just `ably_channel`).
-- `XDG_CONFIG_HOME` is honored by `cache.config_dir()` — always use that helper, never hardcode `~/.config`.
-- The Ably subscriber runs in a dedicated daemon thread with its own event loop. FastMCP's stdio loop is left alone. `atexit` calls `subscriber.stop()`.
+Invariants:
 
-### Three layers (tool registration)
+- `internal/crypto/crypto.go` and `chrome-extension/slack/crypto.js` are byte-compatible:
+  PBKDF2-HMAC-SHA256, **100 000** iterations, AES-256-GCM, wire format
+  `base64(salt[32] || nonce[12] || ciphertext+tag)`. **Change one, change both** or the relay
+  breaks silently.
+- The passphrase and Ably API key live in the OS keychain (`internal/secrets`, service
+  `mcp-slack`). They are never written to disk.
+- `config.json` holds non-secrets only (currently just `ably_channel`).
+- `server.New` waits up to 5s (`Subscriber.WaitReady`) so the first tool call has a token; it logs
+  a warning and continues on timeout. `Server.Stop()` cancels the subscriber goroutine.
 
-1. **`server.py`** — `create_server()` returns `(FastMCP, SlackClient, AblySubscriber | None)`. Subscriber is `None` in OAuth mode or relay mode without a channel. `atexit` hook stops the subscriber on shutdown. To add a new tool module, write `register_X_tools` and add one line to `create_server`.
+### Tool registration
 
-2. **`client.py`** — see "Token sourcing" above. Constructor only validates env / cache wiring — it does NOT call Slack. Auth failures surface lazily on first tool invocation. Tools that require the user token must call `client.require_user()` (raises `RuntimeError` with a clear message if missing).
+`internal/server.New` calls eight `Register*Tools(mcp, client)` functions. To add a tool module,
+write `RegisterXTools` in `internal/tools` and add one line to `New`.
 
-3. **`tools/*.py`** — one module per Slack API domain (messages, channels, users, files, search, reactions, pins, misc). Every tool follows the same shape:
+Every tool follows the same shape:
 
-   ```python
-   @server.tool()
-   @slack_tool                    # from _util — order matters: @server.tool() outermost
-   def tool_name(...) -> str:
-       """Docstring becomes the MCP tool description shown to the LLM."""
-       resp = bot.some_method(...)
-       return ok(key=resp["key"])  # JSON string
-   ```
+```go
+s.AddTool(mcp.NewTool("tool_name",
+    mcp.WithDescription("Shown to the LLM — keep ID formats (C…/U…/xoxp-…) precise."),
+    mcp.WithString("channel", mcp.Required(), mcp.Description("…")),
+), wrap("tool_name", func(req mcp.CallToolRequest) (string, error) {
+    bot, err := c.Bot()   // or c.User() for user-token-only endpoints
+    if err != nil { return "", err }
+    ...
+    return okJSON(map[string]any{"ts": ts}), nil
+}))
+```
 
-   - `@slack_tool` catches `SlackApiError` / `ValueError` / `RuntimeError` and returns `err(...)` JSON. Don't add per-tool try/except — let the decorator handle it.
-   - All tools return JSON strings via `ok(**fields)` / `err(message)` from `_util.py`. Never return raw dicts or `SlackResponse` objects (the latter isn't JSON-serializable).
-   - Tool docstrings are part of the API surface — they're what the LLM client sees when deciding which tool to call. Keep arg descriptions precise (especially ID formats like `C…`/`U…`/`xoxp-…`).
+- `wrap()` converts every returned error into an `errJSON` **tool result**, not an MCP protocol
+  error. Don't add per-handler error plumbing — return the error and let `wrap` render it.
+- All tools return JSON strings via `okJSON(...)` (adds `"status":"success"`) / `errJSON(msg)`.
+- Arguments arrive as `map[string]any`; JSON numbers are `float64`. Use the `util.go` helpers —
+  `strArg`, `strDefault`, `boolDefault`, `intDefault`, `optStr` — rather than hand-casting.
+- Tool descriptions are the API surface the LLM sees. Keep them accurate.
+
+## Tools (53)
+
+| Module | Tools |
+|---|---|
+| `messages.go` (9) | `post_message`, `update_message`, `delete_message`, `post_ephemeral`, `schedule_message`, `list_scheduled_messages`, `delete_scheduled_message`, `get_permalink`, `get_thread_replies` |
+| `channels.go` (16) | `list_channels`, `get_channel_info`, `get_channel_history`, `create_channel`, `archive_channel`, `unarchive_channel`, `rename_channel`, `set_channel_topic`, `set_channel_purpose`, `join_channel`, `leave_channel`, `invite_to_channel`, `kick_from_channel`, `list_channel_members`, `open_dm`, `close_dm` |
+| `users.go` (8) | `list_users`, `get_user_info`, `lookup_user_by_email`, `search_users`, `get_user_presence`, `get_user_profile`, `set_user_profile`*, `set_user_presence`* |
+| `files.go` (4) | `upload_file`, `list_files`, `get_file_info`, `delete_file` |
+| `search.go` (3) | `search_messages`*, `search_files`*, `search_all`* |
+| `reactions.go` (4) | `add_reaction`, `remove_reaction`, `get_reactions`, `list_user_reactions` |
+| `pins.go` (3) | `pin_message`, `unpin_message`, `list_pins` |
+| `misc.go` (7) | `auth_test`, `get_team_info`, `list_emoji`, `list_bookmarks`, `add_bookmark`, `edit_bookmark`, `remove_bookmark` |
+
+`*` = calls `client.User()`; needs `SLACK_USER_TOKEN` in oauth mode (works via the session token in
+relay mode). No MCP *resources* or *prompts* are registered — tools only
+(`server.WithToolCapabilities(true)`).
 
 ## Domain conventions
 
-- **Search APIs** (`search.messages`, `search.files`, `search.all`) are user-token only — Slack does not allow bots to call them. The `search.py` module always uses `client.require_user()`.
-- **`search_users`** is a **client-side filter** over paginated `users.list` (no native Slack endpoint exists). It walks the entire user directory; if a workspace ever gets large enough for this to matter, add caching rather than removing the tool.
-- **File uploads** use `files_upload_v2` (v1 is deprecated by Slack). The v2 response shape returns `files` (list) or sometimes `file` (single) — `upload_file` normalizes both into a `files` list.
-- **Block Kit / attachments** are passed as JSON *strings* (`blocks_json`, `attachments_json`), not dicts. MCP tool args are typed by FastMCP from Python type hints; nested dict args don't round-trip cleanly across all MCP clients, so we accept strings and `json.loads` them inside the tool.
-- **Pagination**: tools that paginate return `next_cursor` (cursor-based, conversations.*/users.*) or `paging` (page-based, files.*/reactions.list) — mirror whatever Slack returns rather than inventing a unified shape.
+- **Search APIs** (`search.messages`, `search.files`, `search.all`) are user-token only; Slack does
+  not allow bots to call them.
+- **`search_users`** is a client-side substring filter over paginated `users.list` — no native
+  Slack endpoint exists. If workspace size ever makes this hurt, add caching rather than dropping
+  the tool.
+- **File uploads** use `files_upload_v2` (v1 is deprecated by Slack).
+- **Block Kit / attachments** are passed as JSON *strings* (`blocks_json`, `attachments_json`),
+  not nested objects — nested object args don't round-trip cleanly across all MCP clients. They are
+  `json.Unmarshal`ed inside the handler.
+- **Pagination**: mirror whatever Slack returns — cursor-based `next_cursor` for
+  `conversations.*`/`users.*`, page-based `paging` for `files.*`/`reactions.list`. Don't invent a
+  unified shape.
+- **Logging** goes to stderr via `log` — stdout is the MCP stdio transport and must stay clean.
+
+## Release
+
+`.goreleaser.yaml` builds **darwin/arm64 only** with `CGO_ENABLED=1` (keychain access), stamps
+`main.version` via ldflags, publishes a Homebrew formula to `neverprepared/homebrew-tap`
+(`Formula/`, needs the `HOMEBREW_TAP_TOKEN` secret), and attaches `chrome-extension.zip` as an
+extra release asset. The `release` workflow triggers on `v*` tags and runs on `macos-14`. There is
+no CI workflow for build/test on push or PR.
